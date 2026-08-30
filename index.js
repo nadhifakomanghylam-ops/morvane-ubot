@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { TelegramClient } = require("telegram");
+const { TelegramClient, Api } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const { NewMessage } = require("telegram/events");
 const input = require("input");
@@ -102,39 +102,46 @@ async function startBot() {
       if (OWNER_ONLY_COMMANDS.includes(command) && !isOwner) return;
 
       if (command === "menu") {
-        await respond(message, `╭━━〔 MORVANE UBOT 〕━━╮
-👤 USERBOT MENU
+        await respond(message, `╭─────────────────╮
+   ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
+╰─────────────────╯
+🤖 Userbot Menu — pakai prefix "${prefix}"
 
-📋 DASAR:
- .menu - Menu utama
-├ .ping - Cek kecepatan
-├ .info - Info akun
- .id - Chat ID
-├ .say <teks> - Edit pesan
-└ .status - Status bot
+📋 𝗗𝗔𝗦𝗔𝗥
+ ▸ 🏠 .menu — Menu utama
+ ▸ 🏓 .ping — Cek kecepatan
+ ▸ ℹ️ .info — Info akun
+ ▸ 🆔 .id — Chat ID
+ ▸ ✏️ .say <teks> — Edit pesan
+ ▸ 🟢 .status — Status bot
 
-📢 BROADCAST MANUAL:
-├ .broadcast <teks> - Broadcast teks
-├ .broadcast (reply foto) - Broadcast foto+caption
- .bc <teks> - (alias broadcast)
+📢 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟
+ ▸ 📣 .broadcast <teks> — Broadcast teks
+ ▸ 🖼️ .broadcast (reply foto) — Broadcast foto+caption
+ ▸ 🔁 .bc <teks> — Alias broadcast
 
-⚙️ BROADCAST OTOMATIS:
-├ .setbc <teks> - Set teks auto
-├ .setdelay <detik> - Set jeda (min 10)
-├ .onbc - Mulai auto broadcast
-├ .offbc - Stop auto broadcast
-└ .bcinfo - Info broadcast
+⏱️ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗢𝗧𝗢𝗠𝗔𝗧𝗜𝗦
+ ▸ 📝 .setbc <teks> — Set teks auto
+ ▸ ⏳ .setdelay <detik> — Set jeda (min 10)
+ ▸ ▶️ .onbc — Mulai auto broadcast
+ ▸ ⏹️ .offbc — Stop auto broadcast
+ ▸ 📊 .bcinfo — Info broadcast
 
- BLACKLIST GRUP:
-├ .addbl - Tambah grup ke blacklist
-├ .removebl <id> - Hapus dari blacklist
-└ .listbl - Lihat daftar blacklist
+🚫 𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧 𝗚𝗥𝗨𝗣
+ ▸ ➕ .addbl — Tambah grup ke blacklist
+ ▸ ➖ .removebl <id> — Hapus dari blacklist
+ ▸ 📃 .listbl — Lihat daftar blacklist
 
-👑 PREMIUM (owner only):
-├ .addprem (reply pesan user) - Kasih akses premium
-├ .delprem <id> - Cabut akses premium
-└ .listprem - Lihat daftar premium
-╰━━━━━━━━━━━━━━━━━━━━━━━━`,);
+👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 (owner only)
+ ▸ 🎟️ .addprem (reply pesan user) — Kasih akses premium
+ ▸ ❌ .delprem <id> — Cabut akses premium
+ ▸ 📋 .listprem — Lihat daftar premium
+
+🔗 𝗝𝗢𝗜𝗡 𝗚𝗥𝗨𝗣
+ ▸ 🚪 .joingc <link> — Join grup biar ikut kena broadcast
+
+╰─────────────────╯
+💠 Powered by Morvane UBot`,);
       } else if (command === "ping") {
         const start = Date.now();
         await respond(message, "🏓 Pong...");
@@ -284,6 +291,25 @@ async function startBot() {
         if (premium.length === 0) return await respond(message, "📭 Belum ada user premium.");
         const list = premium.map((id, i) => `${i + 1}. ${id}`).join("\n");
         await respond(message, `👑 DAFTAR PREMIUM (${premium.length}):\n\n${list}\n\nHapus: .delprem <id>`);
+      } else if (command === "joingc") {
+        const link = args[0];
+        if (!link) {
+          return await respond(message, "❌ Masukkan link/username grup!\nContoh:\n.joingc https://t.me/+abcdef\n.joingc namagrup");
+        }
+        try {
+          if (link.includes("+") || link.includes("joinchat")) {
+            // Private invite link, contoh: https://t.me/+abcdef atau t.me/joinchat/abcdef
+            const hash = link.split(/\+|joinchat\//).pop().replace(/\/$/, "");
+            await client.invoke(new Api.messages.ImportChatInvite({ hash }));
+          } else {
+            // Grup/channel publik, contoh: https://t.me/namagrup atau @namagrup
+            const username = link.replace("https://t.me/", "").replace("@", "").replace(/\/$/, "");
+            await client.invoke(new Api.channels.JoinChannel({ channel: username }));
+          }
+          await respond(message, "✅ Berhasil join grup! Grup ini sekarang otomatis ikut kena broadcast.");
+        } catch (err) {
+          await respond(message, `❌ Gagal join grup: ${err.message}`);
+        }
       }
     } catch (error) {
       console.error("❌ Error:", error);
