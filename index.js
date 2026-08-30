@@ -41,13 +41,17 @@ async function startBot() {
   });
   console.log("✅ UBot berhasil login!");
   console.log("🤖 Morvane UBot Active!");
-  console.log("\n📌 STRING SESSION:");
-  console.log(client.session.save());
+  console.log("📡 Session siap. (String Session tidak dicetak ke log demi keamanan.)");
 
   client.addEventHandler(async (event) => {
     try {
       if (!event || !event.message) return;
       const message = event.message;
+
+      console.log(
+        `📩 EVENT MASUK | out: ${message.out} | chat: ${message.chatId ?? "-"} | text: ${message.message || "[media/no text]"}`
+      );
+
       if (!message.message) return;
       if (!message.out) return;
 
@@ -225,6 +229,15 @@ async function startBot() {
       console.error("❌ Error:", error);
     }
   }, new NewMessage({}));
+
+  console.log("📡 Message handler aktif!");
+  console.log("⏳ Menunggu pesan/command...");
+
+  // Menjaga koneksi Telegram dan update handler tetap hidup di Railway.
+  await client.runUntilDisconnected();
 }
 
-startBot();
+startBot().catch((err) => {
+  console.error("❌ Fatal error:", err);
+  process.exitCode = 1;
+});
