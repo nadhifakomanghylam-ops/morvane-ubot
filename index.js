@@ -214,6 +214,87 @@ async function respond(message, text) {
   scheduleAutoDelete(sent);
 }
 
+// Kalau kena FloodWait (Telegram nge-rem karena kirim kebanyakan/kecepetan),
+// tunggu sesuai durasi yang diminta Telegram lalu coba lagi (maks 2x retry),
+// daripada langsung dianggap gagal.
+async function sendWithFloodRetry(sendFn, maxRetries = 2) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await sendFn();
+    } catch (err) {
+      const msg = err.errorMessage || err.message || "";
+      const floodMatch = msg.match(/FLOOD_WAIT_(\d+)/);
+      const waitSeconds = err.seconds || (floodMatch ? parseInt(floodMatch[1]) : null);
+      if (waitSeconds && attempt < maxRetries) {
+        attempt++;
+        console.log(`⏳ FloodWait ${waitSeconds}s, nunggu lalu coba lagi (percobaan ${attempt}/${maxRetries})...`);
+        await new Promise((r) => setTimeout(r, (waitSeconds + 1) * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+// Grup yang cuma admin boleh kirim pesan (userbot bukan admin di situ) bakal
+// selalu gagal setiap broadcast. Deteksi errornya biar bisa auto-blacklist,
+// daripada terus-terusan gagal di broadcast berikutnya.
+function isWriteForbidden(err) {
+  const msg = err.errorMessage || err.message || "";
+  return msg.includes("CHAT_WRITE_FORBIDDEN");
+}
+
+// Teks menu utama + kirim (foto kalau .setmenupic diset). Dipisah jadi
+// function biar bisa dipanggil ulang: dari command .menu, dan buat
+// auto-kirim menu ke user yang baru ditambah premium (.addprem).
+function buildMainMenuText(data, prefix) {
+  const MENU_NUMBERS = { 1: "dasar", 2: "bc", 3: "ar", 4: "bl", 5: "prem", 6: "lain" };
+  const menuLabels = {
+    dasar: { title: "Dasar", desc: "ping, info, id, dll" },
+    bc: { title: "Broadcast", desc: "kirim pesan manual & otomatis" },
+    ar: { title: "Auto-Reply", desc: "balas otomatis berbasis keyword" },
+    bl: { title: "Blacklist", desc: "kecualikan grup dari broadcast" },
+    prem: { title: "Premium", desc: "akses command dari chat pribadi" },
+    lain: { title: "Lain-lain", desc: "join grup, auto-delete, dll" },
+  };
+  const NUMBER_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣" };
+  const grid = Object.entries(MENU_NUMBERS)
+    .map(([n, key]) => `${NUMBER_EMOJI[n]} ${menuLabels[key].title}\n     ${menuLabels[key].desc}`)
+    .join("\n\n");
+
+  return `╭─────────────────╮
+   ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
+╰─────────────────╯
+Prefix: "${prefix}"
+
+Pilih kategori (ketik angka atau nama):
+
+${grid}
+
+Contoh: .menu 2  atau  .menu bc
+╰─────────────────╯
+💠 Powered by Morvane UBot`;
+}
+
+async function sendMainMenu(peer, data, replyToId) {
+  const menuText = buildMainMenuText(data, prefix);
+  const menuFilePath = data.menuPhoto ? path.join(__dirname, data.menuPhoto) : null;
+  let sentMenu = null;
+  if (menuFilePath && fs.existsSync(menuFilePath)) {
+    try {
+      sentMenu = await client.sendMessage(peer, { message: menuText, file: menuFilePath, replyTo: replyToId });
+    } catch (err) {
+      console.error("❌ Gagal kirim foto menu, fallback teks:", err.message);
+    }
+  }
+  if (!sentMenu) {
+    sentMenu = await client.sendMessage(peer, { message: menuText, replyTo: replyToId });
+  }
+  scheduleAutoDelete(sentMenu);
+  return sentMenu;
+}
+
 // Hapus pesan bot otomatis setelah sekian detik (diset lewat .autodel),
 // biar Saved Messages / chat gak penuh sesak sama konfirmasi command lama.
 function scheduleAutoDelete(sentMessage) {
@@ -344,7 +425,7 @@ async function startBot() {
  ▸ 📃 .listbl — Lihat daftar blacklist`,
 
           prem: `👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 (owner only)
- ▸ 🎟️ .addprem (reply pesan user) — Kasih akses premium
+ ▸ 🎟️ .addprem (reply pesan) atau .addprem <id> — Kasih akses premium (otomatis dikirimin menu)
  ▸ ❌ .delprem <id> — Cabut akses premium
  ▸ 📋 .listprem — Lihat daftar premium`,
 
@@ -367,47 +448,7 @@ async function startBot() {
 
         // List satu kolom aja — grid 2 kolom pakai padEnd gak reliable di
         // Telegram karena lebar emoji angka beda-beda tiap device/font.
-        const menuLabels = {
-          dasar: { title: "Dasar", desc: "ping, info, id, dll" },
-          bc: { title: "Broadcast", desc: "kirim pesan manual & otomatis" },
-          ar: { title: "Auto-Reply", desc: "balas otomatis berbasis keyword" },
-          bl: { title: "Blacklist", desc: "kecualikan grup dari broadcast" },
-          prem: { title: "Premium", desc: "akses command dari chat pribadi" },
-          lain: { title: "Lain-lain", desc: "join grup, auto-delete, dll" },
-        };
-        const NUMBER_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣" };
-        const grid = Object.entries(MENU_NUMBERS)
-          .map(([n, key]) => `${NUMBER_EMOJI[n]} ${menuLabels[key].title}\n     ${menuLabels[key].desc}`)
-          .join("\n\n");
-
-        const mainMenuText = `╭─────────────────╮
-   ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
-╰─────────────────╯
-Prefix: "${prefix}"
-
-Pilih kategori (ketik angka atau nama):
-
-${grid}
-
-Contoh: .menu 2  atau  .menu bc
-╰─────────────────╯
-💠 Powered by Morvane UBot`;
-
-        const menuFilePath = data.menuPhoto ? path.join(__dirname, data.menuPhoto) : null;
-        if (menuFilePath && fs.existsSync(menuFilePath)) {
-          try {
-            const sentMenu = await client.sendMessage(message.chatId, {
-              message: mainMenuText,
-              file: menuFilePath,
-              replyTo: message.id,
-            });
-            scheduleAutoDelete(sentMenu);
-            return;
-          } catch (err) {
-            console.error("❌ Gagal kirim foto menu, fallback teks:", err.message);
-          }
-        }
-        await respond(message, mainMenuText);
+        await sendMainMenu(message.chatId, data, message.id);
       } else if (command === "ping") {
         const start = Date.now();
         await respond(message, "🏓 Pong...");
@@ -500,27 +541,35 @@ Contoh: .menu 2  atau  .menu bc
         let success = 0, failed = 0, skipped = 0;
         const successList = [], failedList = [], skippedList = [];
 
+        let newlyBlacklisted = 0;
         for (const dialog of groups) {
           const idStr = dialog.id.toString();
           const title = dialog.title || dialog.name || "-";
           if (data.blacklist.includes(idStr)) { skipped++; skippedList.push({ id: idStr, title }); continue; }
           try {
-            if (broadcastFile) {
-              await client.sendMessage(dialog.id, { message: broadcastText || "", file: broadcastFile, formattingEntities: quoteEntities });
-            } else {
-              await client.sendMessage(dialog.id, { message: broadcastText, formattingEntities: quoteEntities });
-            }
+            await sendWithFloodRetry(() =>
+              broadcastFile
+                ? client.sendMessage(dialog.id, { message: broadcastText || "", file: broadcastFile, formattingEntities: quoteEntities })
+                : client.sendMessage(dialog.id, { message: broadcastText, formattingEntities: quoteEntities })
+            );
             success++;
             successList.push({ id: idStr, title });
           } catch (err) {
             failed++;
-            failedList.push({ id: idStr, title, reason: err.message });
+            if (isWriteForbidden(err) && !data.blacklist.includes(idStr)) {
+              data.blacklist.push(idStr);
+              newlyBlacklisted++;
+              failedList.push({ id: idStr, title, reason: `${err.message} (otomatis di-blacklist)` });
+            } else {
+              failedList.push({ id: idStr, title, reason: err.message });
+            }
           }
         }
+        if (newlyBlacklisted) saveData(data);
 
         lastBroadcastResult = { success: successList, failed: failedList, skipped: skippedList, timestamp: Date.now() };
 
-        await respond(message, `✅ BROADCAST SELESAI!\n\n📊 Statistik:\n✔️ Berhasil: ${success}\n❌ Gagal: ${failed}\n⏭️ Dilewati (BL): ${skipped}\n\n📝 Pesan: ${broadcastText || "[FOTO]"}\n\nKetik .bclist buat lihat daftar grupnya.`,);
+        await respond(message, `✅ BROADCAST SELESAI!\n\n📊 Statistik:\n✔️ Berhasil: ${success}\n❌ Gagal: ${failed}\n⏭️ Dilewati (BL): ${skipped}${newlyBlacklisted ? `\n🚫 Auto-blacklist (gak bisa kirim): ${newlyBlacklisted}` : ""}\n\n📝 Pesan: ${broadcastText || "[FOTO]"}\n\nKetik .bclist buat lihat daftar grupnya.`,);
       } else if (command === "setbc") {
         const replyMessage = await message.getReplyMessage();
 
@@ -559,8 +608,8 @@ Contoh: .menu 2  atau  .menu bc
         await respond(message, `✅ Teks broadcast disimpan!\n\n"${data.autoText}"`);
       } else if (command === "setdelay") {
         const delay = parseInt(args[0]);
-        if (!delay || delay < 10) {
-          return await respond(message, `❌ Delay minimal 10 detik!\n\n📌 Delay sekarang: ${data.delay} detik`);
+        if (!delay || delay < 3) {
+          return await respond(message, `❌ Delay minimal 3 detik!\n\n📌 Delay sekarang: ${data.delay} detik`);
         }
         data.delay = delay;
         saveData(data);
@@ -592,14 +641,20 @@ Contoh: .menu 2  atau  .menu bc
                 continue;
               }
               try {
-                if (fileExists) {
-                  await client.sendMessage(dialog.id, { message: currentData.autoText || "", file: filePath, formattingEntities: entities });
-                } else {
-                  await client.sendMessage(dialog.id, { message: currentData.autoText, formattingEntities: entities });
-                }
+                await sendWithFloodRetry(() =>
+                  fileExists
+                    ? client.sendMessage(dialog.id, { message: currentData.autoText || "", file: filePath, formattingEntities: entities })
+                    : client.sendMessage(dialog.id, { message: currentData.autoText, formattingEntities: entities })
+                );
                 runResult.success.push({ id: idStr, title });
               } catch (err) {
-                runResult.failed.push({ id: idStr, title, reason: err.message });
+                if (isWriteForbidden(err) && !currentData.blacklist.includes(idStr)) {
+                  currentData.blacklist.push(idStr);
+                  saveData(currentData);
+                  runResult.failed.push({ id: idStr, title, reason: `${err.message} (otomatis di-blacklist)` });
+                } else {
+                  runResult.failed.push({ id: idStr, title, reason: err.message });
+                }
               }
               if (currentData.autoBroadcast) await new Promise((r) => setTimeout(r, currentData.delay * 1000));
             }
@@ -654,12 +709,14 @@ Contoh: .menu 2  atau  .menu bc
         await respond(message, ` DAFTAR BLACKLIST (${data.blacklist.length}):\n\n${list}\n\n Hapus: .removebl <id>`);
       } else if (command === "addprem") {
         const replyMessage = await message.getReplyMessage();
-        if (!replyMessage) {
-          return await respond(message, "❌ Reply pesan orang yang mau ditambah premium, baru ketik .addprem");
+        let targetId = null;
+        if (replyMessage) {
+          targetId = replyMessage.senderId ? replyMessage.senderId.toString() : null;
+        } else if (args[0]) {
+          targetId = args[0];
         }
-        const targetId = replyMessage.senderId ? replyMessage.senderId.toString() : null;
         if (!targetId) {
-          return await respond(message, "❌ Gagal ambil ID user dari pesan yang direply.");
+          return await respond(message, "❌ Reply pesan orang, atau kasih ID-nya!\nContoh: .addprem 8717917279");
         }
         if (!Array.isArray(data.premium)) data.premium = [];
         if (data.premium.includes(targetId)) {
@@ -668,6 +725,15 @@ Contoh: .menu 2  atau  .menu bc
         data.premium.push(targetId);
         saveData(data);
         await respond(message, `✅ User \`${targetId}\` sekarang PREMIUM!\nDia sekarang bisa pakai command ubot ini langsung dari chat pribadi ke akun ini.`);
+
+        // Auto-kirim menu ke user yang baru ditambah, biar dia langsung
+        // lihat sendiri command apa aja yang bisa dipakai.
+        try {
+          const targetEntity = await client.getEntity(BigInt(targetId));
+          await sendMainMenu(targetEntity, data);
+        } catch (err) {
+          console.error(`❌ Gagal auto-kirim menu ke user premium baru (${targetId}):`, err.message);
+        }
       } else if (command === "delprem") {
         const targetId = args[0];
         if (!targetId) return await respond(message, "❌ Masukkan ID!\nContoh: .delprem 8717917279");
@@ -714,13 +780,13 @@ Contoh: .menu 2  atau  .menu bc
         await respond(message, kws.length ? `📋 DAFTAR KEYWORD (${kws.length}):\n${kws.map((k, i) => `${i + 1}. ${k}`).join("\n")}` : "📭 Belum ada keyword. Tambah dengan .addkw <kata>");
       } else if (command === "setarinterval") {
         const sec = parseInt(args[0]);
-        if (!sec || sec < 5) return await respond(message, `❌ Interval minimal 5 detik!\n\n📌 Sekarang: ${data.autoReply.intervalSeconds} detik`);
+        if (!sec || sec < 2) return await respond(message, `❌ Interval minimal 2 detik!\n\n📌 Sekarang: ${data.autoReply.intervalSeconds} detik`);
         data.autoReply.intervalSeconds = sec;
         saveData(data);
         await respond(message, `✅ Jeda antar auto-reply diset ${sec} detik (berlaku global, ke semua grup)`);
       } else if (command === "setarcooldown") {
         const min = parseInt(args[0]);
-        if (!min || min < 1) return await respond(message, `❌ Cooldown minimal 1 menit!\n\n📌 Sekarang: ${data.autoReply.cooldownMinutes} menit`);
+        if (min === undefined || isNaN(min) || min < 0) return await respond(message, `❌ Pakai: .setarcooldown <menit>\nMinimal 0 (0 = tanpa cooldown).\n\n📌 Sekarang: ${data.autoReply.cooldownMinutes} menit`);
         data.autoReply.cooldownMinutes = min;
         saveData(data);
         await respond(message, `✅ Cooldown per orang diset ${min} menit (gak bakal dibales berkali-kali dalam rentang ini)`);
