@@ -41,10 +41,9 @@ async function startBot() {
   });
   console.log("✅ UBot berhasil login!");
   console.log("🤖 Morvane UBot Active!");
-  console.log("\n STRING SESSION:");
+  console.log("\n📌 STRING SESSION:");
   console.log(client.session.save());
 
-  // ✅ FIX: pakai NewMessage filter + safety check
   client.addEventHandler(async (event) => {
     try {
       if (!event || !event.message) return;
@@ -59,7 +58,6 @@ async function startBot() {
       const args = text.slice(prefix.length).trim().split(" ").slice(1);
       const data = loadData();
 
-      // MENU
       if (command === "menu") {
         await message.edit({
           message: `╭━━〔 MORVANE UBOT 〕━━╮
@@ -85,46 +83,34 @@ async function startBot() {
 ├ .offbc - Stop auto broadcast
 └ .bcinfo - Info broadcast
 
-🚫 BLACKLIST GRUP:
+ BLACKLIST GRUP:
 ├ .addbl - Tambah grup ke blacklist
 ├ .removebl <id> - Hapus dari blacklist
 └ .listbl - Lihat daftar blacklist
-╰━━━━━━━━━━━━━━━━━━━━━━━━╯`,
+╰━━━━━━━━━━━━━━━━━━━━━━━━`,
         });
-      }
-      // PING
-      else if (command === "ping") {
+      } else if (command === "ping") {
         const start = Date.now();
         await message.edit({ message: "🏓 Pong..." });
         const speed = Date.now() - start;
-        await message.edit({ message: `🏓 Pong!\n⚡ Speed: ${speed}ms` });
-      }
-      // SAY
-      else if (command === "say") {
+        await message.edit({ message: `🏓 Pong!\n Speed: ${speed}ms` });
+      } else if (command === "say") {
         if (!args.length) {
           return await message.edit({ message: "❌ Masukkan teks!\nContoh: .say Halo dunia" });
         }
         await message.edit({ message: args.join(" ") });
-      }
-      // ID
-      else if (command === "id") {
+      } else if (command === "id") {
         await message.edit({ message: `🆔 Chat ID:\n${message.chatId}` });
-      }
-      // INFO
-      else if (command === "info") {
+      } else if (command === "info") {
         const me = await client.getMe();
         await message.edit({
           message: `👤 ACCOUNT INFO\nNama: ${me.firstName || "-"}\nUsername: @${me.username || "-"}\nID: ${me.id}`,
         });
-      }
-      // STATUS
-      else if (command === "status") {
+      } else if (command === "status") {
         await message.edit({
           message: `🟢 MORVANE UBOT ONLINE\n️ System: Active\n🤖 Client: GramJS\n📡 Status: Connected`,
         });
-      }
-      // BROADCAST MANUAL
-      else if (command === "broadcast" || command === "bc") {
+      } else if (command === "broadcast" || command === "bc") {
         const replyMessage = await message.getReplyMessage();
         let broadcastText = args.join(" ");
         let broadcastFile = null;
@@ -163,18 +149,14 @@ async function startBot() {
         await message.edit({
           message: `✅ BROADCAST SELESAI!\n\n📊 Statistik:\n✔️ Berhasil: ${success}\n❌ Gagal: ${failed}\n⏭️ Dilewati (BL): ${skipped}\n\n📝 Pesan: ${broadcastText || "[FOTO]"}`,
         });
-      }
-      // SET BC
-      else if (command === "setbc") {
+      } else if (command === "setbc") {
         if (!args.length) {
           return await message.edit({ message: `❌ Masukkan teks!\nContoh: .setbc Halo semua\n\n📌 Teks sekarang: ${data.autoText || "[belum diset]"}` });
         }
         data.autoText = args.join(" ");
         saveData(data);
         await message.edit({ message: `✅ Teks broadcast disimpan!\n\n"${data.autoText}"` });
-      }
-      // SET DELAY
-      else if (command === "setdelay") {
+      } else if (command === "setdelay") {
         const delay = parseInt(args[0]);
         if (!delay || delay < 10) {
           return await message.edit({ message: `❌ Delay minimal 10 detik!\n\n📌 Delay sekarang: ${data.delay} detik` });
@@ -182,9 +164,7 @@ async function startBot() {
         data.delay = delay;
         saveData(data);
         await message.edit({ message: `✅ Delay diset ${delay} detik!` });
-      }
-      // ON BC
-      else if (command === "onbc") {
+      } else if (command === "onbc") {
         if (!data.autoText) return await message.edit({ message: "❌ Set teks dulu dengan .setbc <teks>" });
         if (data.autoBroadcast) return await message.edit({ message: "⚠️ Auto broadcast sudah berjalan!" });
 
@@ -214,29 +194,21 @@ async function startBot() {
           if (!currentData.autoBroadcast) { clearInterval(autoBroadcastInterval); return; }
           await doAutoBroadcast();
         }, 60000);
-      }
-      // OFF BC
-      else if (command === "offbc") {
+      } else if (command === "offbc") {
         data.autoBroadcast = false;
         saveData(data);
         await message.edit({ message: "🔴 AUTO BROADCAST DIHENTIKAN!" });
-      }
-      // BC INFO
-      else if (command === "bcinfo") {
+      } else if (command === "bcinfo") {
         await message.edit({
           message: ` INFO BROADCAST\n\n🟢 Auto BC: ${data.autoBroadcast ? "AKTIF" : "MATI"}\n📝 Teks: ${data.autoText || "[belum diset]"}\n⏱️ Delay: ${data.delay} detik\n🚫 Blacklist: ${data.blacklist.length} grup`,
         });
-      }
-      // ADD BL
-      else if (command === "addbl") {
+      } else if (command === "addbl") {
         const chatId = message.chatId.toString();
         if (data.blacklist.includes(chatId)) return await message.edit({ message: "⚠️ Sudah ada di blacklist!" });
         data.blacklist.push(chatId);
         saveData(data);
         await message.edit({ message: `✅ Grup ditambahkan ke blacklist!\n🆔 ID: ${chatId}` });
-      }
-      // REMOVE BL
-      else if (command === "removebl") {
+      } else if (command === "removebl") {
         const targetId = args[0];
         if (!targetId) return await message.edit({ message: " Masukkan ID!\nContoh: .removebl -1001234567890" });
         const idx = data.blacklist.indexOf(targetId);
@@ -244,12 +216,10 @@ async function startBot() {
         data.blacklist.splice(idx, 1);
         saveData(data);
         await message.edit({ message: `✅ ID ${targetId} dihapus dari blacklist!` });
-      }
-      // LIST BL
-      else if (command === "listbl") {
+      } else if (command === "listbl") {
         if (data.blacklist.length === 0) return await message.edit({ message: " Blacklist kosong!" });
         const list = data.blacklist.map((id, i) => `${i + 1}. ${id}`).join("\n");
-        await message.edit({ message: ` DAFTAR BLACKLIST (${data.blacklist.length}):\n\n${list}\n\n💡 Hapus: .removebl <id>` });
+        await message.edit({ message: ` DAFTAR BLACKLIST (${data.blacklist.length}):\n\n${list}\n\n Hapus: .removebl <id>` });
       }
     } catch (error) {
       console.error("❌ Error:", error);
