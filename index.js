@@ -43,6 +43,10 @@ async function startBot() {
   console.log("🤖 Morvane UBot Active!");
   console.log("📡 Session siap. (String Session tidak dicetak ke log demi keamanan.)");
 
+  const me = await client.getMe();
+  const myId = me.id.toString();
+  console.log(`👤 Logged in as ${me.username ? "@" + me.username : me.firstName || myId} | ID: ${myId}`);
+
   client.addEventHandler(async (event) => {
     try {
       if (!event || !event.message) return;
@@ -53,7 +57,11 @@ async function startBot() {
       );
 
       if (!message.message) return;
-      if (!message.out) return;
+
+      // Proses command hanya dari Saved Messages / akun sendiri.
+      // Beberapa update GramJS dapat terbaca sebagai out=false, jadi jangan
+      // bergantung pada message.out untuk menentukan pesan milik sendiri.
+      if (!message.chatId || message.chatId.toString() !== myId) return;
 
       const text = message.message;
       if (!text.startsWith(prefix)) return;
@@ -233,8 +241,10 @@ async function startBot() {
   console.log("📡 Message handler aktif!");
   console.log("⏳ Menunggu pesan/command...");
 
-  // Menjaga koneksi Telegram dan update handler tetap hidup di Railway.
-  await client.runUntilDisconnected();
+  // client.start() sudah menjalankan koneksi/update loop GramJS.
+  // Jangan memanggil runUntilDisconnected() karena method tersebut tidak tersedia
+  // pada versi GramJS yang digunakan oleh project ini.
+  await new Promise(() => {});
 }
 
 startBot().catch((err) => {
