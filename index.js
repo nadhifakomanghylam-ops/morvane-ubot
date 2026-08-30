@@ -93,8 +93,15 @@ async function startBot() {
       const text = message.message;
       if (!text.startsWith(prefix)) return;
 
-      const command = text.slice(prefix.length).trim().split(" ")[0].toLowerCase();
-      const args = text.slice(prefix.length).trim().split(" ").slice(1);
+      // Ambil "kata pertama" sebagai command (berhenti di spasi ATAU enter),
+      // sisanya (argsText) dibiarkan utuh termasuk baris barunya — biar
+      // command yang butuh teks panjang/multi-baris (.setbc, .say, .broadcast)
+      // gak ketangkep berantakan atau ke-duplikat kayak yang kejadian tadi.
+      const body = text.slice(prefix.length);
+      const firstMatch = body.match(/^(\S+)([\s\S]*)$/);
+      const command = firstMatch ? firstMatch[1].toLowerCase() : "";
+      const argsText = firstMatch ? firstMatch[2].trim() : "";
+      const args = argsText.length ? argsText.split(/\s+/) : [];
 
       // Command yang ngatur akses premium hanya boleh dipakai owner,
       // biar user premium gak bisa nambahin premium lain sembarangan.
@@ -151,7 +158,7 @@ async function startBot() {
         if (!args.length) {
           return await respond(message, "❌ Masukkan teks!\nContoh: .say Halo dunia");
         }
-        await respond(message, args.join(" "));
+        await respond(message, argsText);
       } else if (command === "id") {
         await respond(message, `🆔 Chat ID:\n${message.chatId}`);
       } else if (command === "info") {
@@ -161,7 +168,7 @@ async function startBot() {
         await respond(message, `🟢 MORVANE UBOT ONLINE\n️ System: Active\n🤖 Client: GramJS\n📡 Status: Connected`,);
       } else if (command === "broadcast" || command === "bc") {
         const replyMessage = await message.getReplyMessage();
-        let broadcastText = args.join(" ");
+        let broadcastText = argsText;
         let broadcastFile = null;
 
         if (replyMessage && replyMessage.media) {
@@ -198,7 +205,7 @@ async function startBot() {
         if (!args.length) {
           return await respond(message, `❌ Masukkan teks!\nContoh: .setbc Halo semua\n\n📌 Teks sekarang: ${data.autoText || "[belum diset]"}`);
         }
-        data.autoText = args.join(" ");
+        data.autoText = argsText;
         saveData(data);
         await respond(message, `✅ Teks broadcast disimpan!\n\n"${data.autoText}"`);
       } else if (command === "setdelay") {
