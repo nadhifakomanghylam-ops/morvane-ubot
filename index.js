@@ -14,11 +14,25 @@ const prefix = process.env.PREFIX || ".";
 const DATA_FILE = path.join(__dirname, "data.json");
 
 function loadData() {
+  let data;
   try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
   } catch {
-    return { blacklist: [], premium: [], autoText: "", autoFile: null, delay: 10, autoBroadcast: false };
+    data = {};
   }
+  if (!Array.isArray(data.blacklist)) data.blacklist = [];
+  if (!Array.isArray(data.premium)) data.premium = [];
+  if (typeof data.autoText !== "string") data.autoText = "";
+  if (data.autoFile === undefined) data.autoFile = null;
+  if (typeof data.delay !== "number") data.delay = 10;
+  if (typeof data.autoBroadcast !== "boolean") data.autoBroadcast = false;
+  // Konfigurasi auto-reply berbasis keyword (bukan ke semua pesan)
+  if (!data.autoReply || typeof data.autoReply !== "object") data.autoReply = {};
+  if (!Array.isArray(data.autoReply.keywords)) data.autoReply.keywords = [];
+  if (typeof data.autoReply.enabled !== "boolean") data.autoReply.enabled = false;
+  if (typeof data.autoReply.intervalSeconds !== "number") data.autoReply.intervalSeconds = 15;
+  if (typeof data.autoReply.cooldownMinutes !== "number") data.autoReply.cooldownMinutes = 30;
+  return data;
 }
 
 function saveData(data) {
@@ -32,6 +46,11 @@ const client = new TelegramClient(stringSession, apiId, apiHash, {
 let autoBroadcastInterval = null;
 // Simpan hasil broadcast terakhir (manual maupun otomatis) buat command .bclist
 let lastBroadcastResult = null;
+// State rate-limit auto-reply keyword: jeda global antar balasan + cooldown
+// per pengirim, biar gak nge-spam orang yang sama terus-terusan. Disimpan
+// di memori aja (reset kalau bot direstart), gak perlu ditulis ke disk.
+let lastAutoReplyTime = 0;
+const autoReplyCooldownMap = new Map();
 
 // Bikin entity "blockquote" asli Telegram (bar kutip di kiri + ikon kutip),
 // bukan cuma ASCII art. Offset/length pakai text.length karena string JS
@@ -39,6 +58,47 @@ let lastBroadcastResult = null;
 function buildQuoteEntities(text) {
   if (!text) return undefined;
   return [new Api.MessageEntityBlockquote({ offset: 0, length: text.length })];
+}
+
+// Auto-reply berbasis KEYWORD (bukan ke semua pesan). Cuma jalan kalau
+// pesan orang lain di grup/channel mengandung salah satu kata kunci yang
+// diset lewat .addkw, dan hormat dua batas: jeda global (intervalSeconds)
+// serta cooldown per pengirim (cooldownMinutes) biar gak keliatan spam.
+async function handleKeywordAutoReply(message, senderIdStr, data) {
+  const ar = data.autoReply;
+  if (!ar.enabled) return;
+  if (!ar.keywords.length) return;
+  if (!data.autoText && !data.autoFile) return; // belum ada konten (pakai .setbc dulu)
+
+  const text = (message.message || "").toLowerCase();
+  const matched = ar.keywords.some((kw) => kw && text.includes(kw.toLowerCase()));
+  if (!matched) return;
+
+  const now = Date.now();
+  if (now - lastAutoReplyTime < ar.intervalSeconds * 1000) return; // masih dalam jeda global
+  const lastToSender = autoReplyCooldownMap.get(senderIdStr) || 0;
+  if (now - lastToSender < ar.cooldownMinutes * 60000) return; // orang ini baru aja dibales
+
+  const entities = buildQuoteEntities(data.autoText);
+  const filePath = data.autoFile ? path.join(__dirname, data.autoFile) : null;
+  const fileExists = filePath && fs.existsSync(filePath);
+
+  try {
+    if (fileExists) {
+      try {
+        await message.reply({ message: data.autoText || "", file: filePath, formattingEntities: entities });
+      } catch {
+        // Grup ini kemungkinan gak izinin kirim media -> fallback teks doang
+        await message.reply({ message: data.autoText || "", formattingEntities: entities });
+      }
+    } else {
+      await message.reply({ message: data.autoText, formattingEntities: entities });
+    }
+    lastAutoReplyTime = now;
+    autoReplyCooldownMap.set(senderIdStr, now);
+  } catch (err) {
+    console.error("❌ Gagal auto-reply keyword:", err.message);
+  }
 }
 
 // Coba edit pesan (bisa dilakukan kalau pesan itu milik akun sendiri, misal
@@ -97,6 +157,16 @@ async function startBot() {
         Array.isArray(data.premium) &&
         data.premium.includes(senderIdStr);
 
+      // Auto-reply keyword: jalan buat pesan ORANG LAIN (bukan command punya
+      // sendiri) di grup/channel. Diproses di sini, SEBELUM early-return di
+      // bawah, karena early-return itu cuma buat gerbang command (.broadcast,
+      // .setbc, dst) yang memang harus dari owner/premium.
+      if (!isOwner && senderIdStr && (message.isGroup || message.isChannel)) {
+        handleKeywordAutoReply(message, senderIdStr, data).catch((e) =>
+          console.error("Auto-reply error:", e.message)
+        );
+      }
+
       // Proses command hanya dari owner atau user premium.
       if (!isOwner && !isPremium) return;
 
@@ -150,6 +220,16 @@ async function startBot() {
  ▸ ➕ .addbl — Tambah grup ke blacklist
  ▸ ➖ .removebl <id> — Hapus dari blacklist
  ▸ 📃 .listbl — Lihat daftar blacklist
+
+💬 𝗔𝗨𝗧𝗢-𝗥𝗘𝗣𝗟𝗬 𝗞𝗘𝗬𝗪𝗢𝗥𝗗
+ ▸ 🔛 .autoreply on/off — Aktif/matikan
+ ▸ ➕ .addkw <kata1,kata2> — Tambah keyword trigger
+ ▸ ➖ .delkw <kata> — Hapus keyword
+ ▸ 📋 .listkw — Lihat daftar keyword
+ ▸ ⏱️ .setarinterval <detik> — Jeda global antar reply
+ ▸ 🧊 .setarcooldown <menit> — Cooldown per orang
+ ▸ 📊 .arinfo — Info status auto-reply
+ (Konten balasan pakai foto+teks dari .setbc)
 
 👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 (owner only)
  ▸ 🎟️ .addprem (reply pesan user) — Kasih akses premium
@@ -392,6 +472,51 @@ async function startBot() {
         if (premium.length === 0) return await respond(message, "📭 Belum ada user premium.");
         const list = premium.map((id, i) => `${i + 1}. ${id}`).join("\n");
         await respond(message, `👑 DAFTAR PREMIUM (${premium.length}):\n\n${list}\n\nHapus: .delprem <id>`);
+      } else if (command === "autoreply") {
+        const mode = (args[0] || "").toLowerCase();
+        if (mode !== "on" && mode !== "off") {
+          return await respond(message, `❌ Pakai: .autoreply on / .autoreply off\n\n📌 Status sekarang: ${data.autoReply.enabled ? "AKTIF" : "MATI"}`);
+        }
+        data.autoReply.enabled = mode === "on";
+        saveData(data);
+        await respond(message, `✅ Auto-reply keyword sekarang ${data.autoReply.enabled ? "AKTIF 🟢" : "MATI 🔴"}`);
+      } else if (command === "addkw") {
+        if (!argsText) return await respond(message, "❌ Masukkan kata kunci!\nContoh: .addkw harga,minat,info produk");
+        const newKeywords = argsText.split(",").map((k) => k.trim()).filter(Boolean);
+        let added = 0;
+        for (const kw of newKeywords) {
+          if (!data.autoReply.keywords.some((k) => k.toLowerCase() === kw.toLowerCase())) {
+            data.autoReply.keywords.push(kw);
+            added++;
+          }
+        }
+        saveData(data);
+        await respond(message, `✅ ${added} keyword ditambahkan!\n\n📋 Daftar sekarang:\n${data.autoReply.keywords.join(", ") || "-"}`);
+      } else if (command === "delkw") {
+        if (!argsText) return await respond(message, "❌ Masukkan kata kunci yang mau dihapus!\nContoh: .delkw harga");
+        const before = data.autoReply.keywords.length;
+        data.autoReply.keywords = data.autoReply.keywords.filter((k) => k.toLowerCase() !== argsText.toLowerCase());
+        saveData(data);
+        const removed = before - data.autoReply.keywords.length;
+        await respond(message, removed ? `✅ Keyword "${argsText}" dihapus!` : `❌ Keyword "${argsText}" tidak ditemukan.`);
+      } else if (command === "listkw") {
+        const kws = data.autoReply.keywords;
+        await respond(message, kws.length ? `📋 DAFTAR KEYWORD (${kws.length}):\n${kws.map((k, i) => `${i + 1}. ${k}`).join("\n")}` : "📭 Belum ada keyword. Tambah dengan .addkw <kata>");
+      } else if (command === "setarinterval") {
+        const sec = parseInt(args[0]);
+        if (!sec || sec < 5) return await respond(message, `❌ Interval minimal 5 detik!\n\n📌 Sekarang: ${data.autoReply.intervalSeconds} detik`);
+        data.autoReply.intervalSeconds = sec;
+        saveData(data);
+        await respond(message, `✅ Jeda antar auto-reply diset ${sec} detik (berlaku global, ke semua grup)`);
+      } else if (command === "setarcooldown") {
+        const min = parseInt(args[0]);
+        if (!min || min < 1) return await respond(message, `❌ Cooldown minimal 1 menit!\n\n📌 Sekarang: ${data.autoReply.cooldownMinutes} menit`);
+        data.autoReply.cooldownMinutes = min;
+        saveData(data);
+        await respond(message, `✅ Cooldown per orang diset ${min} menit (gak bakal dibales berkali-kali dalam rentang ini)`);
+      } else if (command === "arinfo") {
+        const ar = data.autoReply;
+        await respond(message, `🤖 INFO AUTO-REPLY KEYWORD\n\n🟢 Status: ${ar.enabled ? "AKTIF" : "MATI"}\n🔑 Keyword (${ar.keywords.length}): ${ar.keywords.join(", ") || "-"}\n⏱️ Jeda global: ${ar.intervalSeconds} detik\n🧊 Cooldown per orang: ${ar.cooldownMinutes} menit\n📦 Konten: ${data.autoFile ? "Foto + teks (dari .setbc)" : data.autoText ? "Teks saja (dari .setbc)" : "❌ Belum diset, pakai .setbc dulu"}`);
       } else if (command === "joingc") {
         const link = args[0];
         if (!link) {
