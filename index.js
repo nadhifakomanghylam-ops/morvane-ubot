@@ -73,14 +73,14 @@ async function startBot() {
 
       if (!message.message) return;
 
-      const chatIdStr = message.chatId ? message.chatId.toString() : null;
       const senderIdStr = message.senderId ? message.senderId.toString() : null;
       const data = loadData();
 
-      // Owner = command dikirim lewat Saved Messages / akun sendiri.
-      // Beberapa update GramJS dapat terbaca sebagai out=false, jadi jangan
-      // bergantung pada message.out untuk menentukan pesan milik sendiri.
-      const isOwner = chatIdStr === myId;
+      // Owner = pesan yang DIKIRIM oleh akun ini sendiri, di chat manapun
+      // (Saved Messages, DM ke orang lain, dll) — bukan cuma di Saved Messages.
+      // Pakai senderId, bukan chatId, karena chatId di private chat selalu
+      // merujuk ke lawan bicara, bukan ke pemilik akun.
+      const isOwner = senderIdStr === myId;
       const isPremium =
         !isOwner &&
         senderIdStr &&
