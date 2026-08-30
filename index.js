@@ -9,14 +9,9 @@ const apiHash = process.env.API_HASH;
 const stringSession = new StringSession(process.env.STRING_SESSION || "");
 const prefix = process.env.PREFIX || ".";
 
-const client = new TelegramClient(
-  stringSession,
-  apiId,
-  apiHash,
-  {
-    connectionRetries: 5,
-  }
-);
+const client = new TelegramClient(stringSession, apiId, apiHash, {
+  connectionRetries: 5,
+});
 
 async function startBot() {
   console.log("🚀 Starting Morvane UBot...");
@@ -30,38 +25,38 @@ async function startBot() {
   
   console.log("✅ UBot berhasil login!");
   console.log("🤖 Morvane UBot Active!");
-  console.log("\n📌 STRING SESSION:");
+  console.log("\n STRING SESSION:");
   console.log(client.session.save());
 
-  // Use NewMessage event filter to ensure we only handle message events
+  // Event handler yang lebih simple
   client.addEventHandler(async (event) => {
-    const message = event.message;
-    
-    // Safety check
-    if (!message || !message.message) return;
-    
-    // Hanya membaca pesan dari akun sendiri
-    if (!message.out) return;
-    
-    const text = message.message;
-    if (!text.startsWith(prefix)) return;
-    
-    const command = text
-      .slice(prefix.length)
-      .trim()
-      .split(" ")[0]
-      .toLowerCase();
-    
-    const args = text
-      .slice(prefix.length)
-      .trim()
-      .split(" ")
-      .slice(1);
-
-    // COMMAND MENU
-    if (command === "menu") {
-      await message.edit({
-        message: `╭━━〔 MORVANE UBOT 〕━━╮
+    try {
+      const message = event.message;
+      
+      // Debug log
+      console.log("📨 Received message:", message?.message);
+      console.log("👤 From:", message?.senderId);
+      console.log(" Outgoing:", message?.out);
+      
+      if (!message || !message.message) return;
+      
+      const text = message.message;
+      
+      // Cek prefix
+      if (!text.startsWith(prefix)) {
+        console.log("❌ No prefix match");
+        return;
+      }
+      
+      const command = text.slice(prefix.length).trim().split(" ")[0].toLowerCase();
+      const args = text.slice(prefix.length).trim().split(" ").slice(1);
+      
+      console.log("✅ Command detected:", command);
+      
+      // COMMAND MENU
+      if (command === "menu") {
+        await client.sendMessage(message.chatId, {
+          message: `╭━━〔 MORVANE UBOT 〕━━╮
 👤 USERBOT MENU
  .menu
 ├ .ping
@@ -70,46 +65,59 @@ async function startBot() {
 ├ .say <text>
 └ .status
 ╰━━━━━━━━━━━━━━━━╯`,
-      });
-    }
-    // COMMAND PING
-    else if (command === "ping") {
-      const start = Date.now();
-      await message.edit({ message: "🏓 Pong..." });
-      const speed = Date.now() - start;
-      await message.edit({ message: `🏓 Pong!\n⚡ Speed: ${speed}ms` });
-    }
-    // COMMAND SAY
-    else if (command === "say") {
-      if (!args.length) {
-        return await message.edit({ message: "❌ Masukkan teks!\nContoh: .say Halo dunia" });
+        });
       }
-      await message.edit({ message: args.join(" ") });
-    }
-    // COMMAND ID
-    else if (command === "id") {
-      await message.edit({ message: `🆔 Chat ID:\n${message.chatId}` });
-    }
-    // COMMAND INFO
-    else if (command === "info") {
-      const me = await client.getMe();
-      await message.edit({
-        message: `👤 ACCOUNT INFO
+      // COMMAND PING
+      else if (command === "ping") {
+        const start = Date.now();
+        const msg = await client.sendMessage(message.chatId, { message: "🏓 Pong..." });
+        const speed = Date.now() - start;
+        await client.editMessage(message.chatId, {
+          id: msg.id,
+          text: ` Pong!\n⚡ Speed: ${speed}ms`,
+        });
+      }
+      // COMMAND SAY
+      else if (command === "say") {
+        if (!args.length) {
+          await client.sendMessage(message.chatId, {
+            message: "❌ Masukkan teks!\nContoh: .say Halo dunia",
+          });
+          return;
+        }
+        await client.sendMessage(message.chatId, { message: args.join(" ") });
+      }
+      // COMMAND ID
+      else if (command === "id") {
+        await client.sendMessage(message.chatId, {
+          message: `🆔 Chat ID:\n${message.chatId}`,
+        });
+      }
+      // COMMAND INFO
+      else if (command === "info") {
+        const me = await client.getMe();
+        await client.sendMessage(message.chatId, {
+          message: `👤 ACCOUNT INFO
 Nama: ${me.firstName || "-"}
 Username: @${me.username || "-"}
 ID: ${me.id}`,
-      });
-    }
-    // COMMAND STATUS
-    else if (command === "status") {
-      await message.edit({
-        message: `🟢 MORVANE UBOT ONLINE
+        });
+      }
+      // COMMAND STATUS
+      else if (command === "status") {
+        await client.sendMessage(message.chatId, {
+          message: `🟢 MORVANE UBOT ONLINE
 ️ System: Active
 🤖 Client: GramJS
 📡 Status: Connected`,
-      });
+        });
+      }
+    } catch (error) {
+      console.error("❌ Error:", error);
     }
-  }, new NewMessage({ outgoing: true }));
+  }, new NewMessage({}));
+  
+  console.log(" Listening for messages...");
 }
 
 startBot();
