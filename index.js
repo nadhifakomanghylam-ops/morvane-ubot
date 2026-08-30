@@ -26,6 +26,8 @@ function loadData() {
   if (data.autoFile === undefined) data.autoFile = null;
   if (typeof data.delay !== "number") data.delay = 10;
   if (typeof data.autoBroadcast !== "boolean") data.autoBroadcast = false;
+  // Auto-delete balasan bot biar chat gak numpuk (detik; 0 = mati)
+  if (typeof data.autoDeleteSeconds !== "number") data.autoDeleteSeconds = 30;
   // Konfigurasi auto-reply berbasis keyword (bukan ke semua pesan)
   if (!data.autoReply || typeof data.autoReply !== "object") data.autoReply = {};
   if (!Array.isArray(data.autoReply.keywords)) data.autoReply.keywords = [];
@@ -193,16 +195,37 @@ async function handleKeywordAutoReply(message, senderIdStr, data) {
 // Coba edit pesan (bisa dilakukan kalau pesan itu milik akun sendiri, misal
 // command dikirim lewat Saved Messages oleh owner). Kalau gagal (misal
 // pesannya punya user premium lain, bukan milik akun ini), fallback ke reply.
+// Setelah itu, kalau auto-delete aktif, pesan hasilnya dijadwalkan kehapus
+// sendiri biar chat gak numpuk.
 async function respond(message, text) {
+  let sent = null;
   try {
-    await message.edit({ text });
+    sent = await message.edit({ text });
   } catch (e) {
     try {
-      await message.reply({ message: text });
+      sent = await message.reply({ message: text });
     } catch (e2) {
       console.error("❌ Gagal membalas pesan:", e2.message);
+      return;
     }
   }
+  scheduleAutoDelete(sent);
+}
+
+// Hapus pesan bot otomatis setelah sekian detik (diset lewat .autodel),
+// biar Saved Messages / chat gak penuh sesak sama konfirmasi command lama.
+function scheduleAutoDelete(sentMessage) {
+  if (!sentMessage) return;
+  const data = loadData();
+  const seconds = data.autoDeleteSeconds || 0;
+  if (!seconds) return; // 0 = fitur mati
+  setTimeout(async () => {
+    try {
+      await client.deleteMessages(sentMessage.chatId, [sentMessage.id], { revoke: true });
+    } catch {
+      // abaikan kalau pesannya udah kehapus manual duluan
+    }
+  }, seconds * 1000);
 }
 
 async function startBot() {
@@ -278,20 +301,15 @@ async function startBot() {
       if (OWNER_ONLY_COMMANDS.includes(command) && !isOwner) return;
 
       if (command === "menu") {
-        await respond(message, `╭─────────────────╮
-   ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
-╰─────────────────╯
-🤖 Userbot Menu — pakai prefix "${prefix}"
-
-📋 𝗗𝗔𝗦𝗔𝗥
- ▸ 🏠 .menu — Menu utama
+        const menus = {
+          dasar: `📋 𝗗𝗔𝗦𝗔𝗥
  ▸ 🏓 .ping — Cek kecepatan
  ▸ ℹ️ .info — Info akun
  ▸ 🆔 .id — Chat ID
  ▸ ✏️ .say <teks> — Edit pesan
- ▸ 🟢 .status — Status bot
+ ▸ 🟢 .status — Status bot`,
 
-📢 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟
+          bc: `📢 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗠𝗔𝗡𝗨𝗔𝗟
  ▸ 📣 .broadcast <teks> — Broadcast teks
  ▸ 🖼️ .broadcast (reply foto) — Broadcast foto+caption
  ▸ 🔁 .bc <teks> — Alias broadcast
@@ -303,14 +321,9 @@ async function startBot() {
  ▸ ▶️ .onbc — Mulai auto broadcast
  ▸ ⏹️ .offbc — Stop auto broadcast
  ▸ 📊 .bcinfo — Info broadcast
- ▸ 📋 .bclist — Daftar grup terkirim/gagal/skip
+ ▸ 📋 .bclist — Daftar grup terkirim/gagal/skip`,
 
-🚫 𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧 𝗚𝗥𝗨𝗣
- ▸ ➕ .addbl — Tambah grup ke blacklist
- ▸ ➖ .removebl <id> — Hapus dari blacklist
- ▸ 📃 .listbl — Lihat daftar blacklist
-
-💬 𝗔𝗨𝗧𝗢-𝗥𝗘𝗣𝗟𝗬 𝗞𝗘𝗬𝗪𝗢𝗥𝗗
+          ar: `💬 𝗔𝗨𝗧𝗢-𝗥𝗘𝗣𝗟𝗬 𝗞𝗘𝗬𝗪𝗢𝗥𝗗
  ▸ 🔛 .autoreply on/off — Aktif/matikan
  ▸ ➕ .addkw <kata1,kata2> — Tambah keyword trigger
  ▸ ➖ .delkw <kata> — Hapus keyword
@@ -319,15 +332,42 @@ async function startBot() {
  ▸ 🧊 .setarcooldown <menit> — Cooldown per orang
  ▸ 📊 .arinfo — Info status auto-reply
  ▸ 🔤 .testfont <teks> — Tes normalisasi font keren
- (Konten balasan pakai foto+teks dari .setbc, deteksi keyword anti font keren)
 
-👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 (owner only)
+(Konten balasan pakai foto+teks dari .setbc, deteksi keyword anti font keren)`,
+
+          bl: `🚫 𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧 𝗚𝗥𝗨𝗣
+ ▸ ➕ .addbl — Tambah grup ke blacklist
+ ▸ ➖ .removebl <id> — Hapus dari blacklist
+ ▸ 📃 .listbl — Lihat daftar blacklist`,
+
+          prem: `👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 (owner only)
  ▸ 🎟️ .addprem (reply pesan user) — Kasih akses premium
  ▸ ❌ .delprem <id> — Cabut akses premium
- ▸ 📋 .listprem — Lihat daftar premium
+ ▸ 📋 .listprem — Lihat daftar premium`,
 
-🔗 𝗝𝗢𝗜𝗡 𝗚𝗥𝗨𝗣
- ▸ 🚪 .joingc <link> — Join grup biar ikut kena broadcast
+          lain: `⚙️ 𝗟𝗔𝗜𝗡-𝗟𝗔𝗜𝗡
+ ▸ 🔗 .joingc <link> — Join grup biar ikut kena broadcast
+ ▸ 🧹 .autodel <detik|off> — Auto-hapus balasan bot biar gak numpuk`,
+        };
+
+        const sub = (args[0] || "").toLowerCase();
+        if (sub && menus[sub]) {
+          return await respond(message, menus[sub]);
+        }
+
+        await respond(message, `╭─────────────────╮
+   ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
+╰─────────────────╯
+Prefix: "${prefix}"
+
+Ketik .menu <kategori> buat lihat detailnya:
+
+ ▸ .menu dasar — command dasar
+ ▸ .menu bc — broadcast manual & otomatis
+ ▸ .menu ar — auto-reply keyword
+ ▸ .menu bl — blacklist grup
+ ▸ .menu prem — premium (owner)
+ ▸ .menu lain — join grup, auto-delete, dll
 
 ╰─────────────────╯
 💠 Powered by Morvane UBot`,);
@@ -610,6 +650,20 @@ async function startBot() {
       } else if (command === "testfont") {
         if (!argsText) return await respond(message, "❌ Kasih contoh teksnya!\nContoh: .testfont 𝓱𝓪𝓻𝓰𝓪 ᴅᴏɴɢ");
         await respond(message, `🔤 TES NORMALISASI FONT\n\nAsli: ${argsText}\nHasil: ${normalizeFancyText(argsText)}`);
+      } else if (command === "autodel") {
+        const val = (args[0] || "").toLowerCase();
+        if (val === "off" || val === "0") {
+          data.autoDeleteSeconds = 0;
+          saveData(data);
+          return await respond(message, "✅ Auto-delete DIMATIKAN. Balasan bot gak bakal kehapus otomatis lagi.");
+        }
+        const sec = parseInt(val);
+        if (!sec || sec < 5) {
+          return await respond(message, `❌ Pakai: .autodel <detik> atau .autodel off\nMinimal 5 detik.\n\n📌 Sekarang: ${data.autoDeleteSeconds === 0 ? "MATI" : data.autoDeleteSeconds + " detik"}`);
+        }
+        data.autoDeleteSeconds = sec;
+        saveData(data);
+        await respond(message, `✅ Balasan bot bakal auto-kehapus setelah ${sec} detik.`);
       } else if (command === "joingc") {
         const link = args[0];
         if (!link) {
