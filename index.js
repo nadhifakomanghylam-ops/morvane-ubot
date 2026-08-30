@@ -31,6 +31,14 @@ const client = new TelegramClient(stringSession, apiId, apiHash, {
 
 let autoBroadcastInterval = null;
 
+// Bikin entity "blockquote" asli Telegram (bar kutip di kiri + ikon kutip),
+// bukan cuma ASCII art. Offset/length pakai text.length karena string JS
+// sudah dalam satuan UTF-16 code unit, sama seperti yang dipakai Telegram.
+function buildQuoteEntities(text) {
+  if (!text) return undefined;
+  return [new Api.MessageEntityBlockquote({ offset: 0, length: text.length })];
+}
+
 // Coba edit pesan (bisa dilakukan kalau pesan itu milik akun sendiri, misal
 // command dikirim lewat Saved Messages oleh owner). Kalau gagal (misal
 // pesannya punya user premium lain, bukan milik akun ini), fallback ke reply.
@@ -173,9 +181,17 @@ async function startBot() {
 
         if (replyMessage && replyMessage.media) {
           broadcastFile = replyMessage.media;
-          if (!broadcastText && replyMessage.message) {
-            broadcastText = replyMessage.message;
+          // Gabung: teks yang ditulis setelah .broadcast + caption asli foto
+          // yang direply (bukan saling timpa kayak sebelumnya).
+          if (replyMessage.message) {
+            broadcastText = argsText
+              ? `${argsText}\n\n${replyMessage.message}`
+              : replyMessage.message;
           }
+        } else if (!broadcastText && replyMessage && replyMessage.message) {
+          // Reply ke pesan teks biasa (tanpa media) & tanpa argsText -> pakai
+          // teks yang direply.
+          broadcastText = replyMessage.message;
         }
 
         if (!broadcastText && !broadcastFile) {
@@ -184,6 +200,7 @@ async function startBot() {
 
         await respond(message, " Memulai broadcast...\nMohon tunggu...");
 
+        const quoteEntities = buildQuoteEntities(broadcastText);
         const dialogs = await client.getDialogs();
         const groups = dialogs.filter((d) => d.isGroup || d.isChannel);
         let success = 0, failed = 0, skipped = 0;
@@ -192,9 +209,9 @@ async function startBot() {
           if (data.blacklist.includes(dialog.id.toString())) { skipped++; continue; }
           try {
             if (broadcastFile) {
-              await client.sendMessage(dialog.id, { message: broadcastText || "", file: broadcastFile });
+              await client.sendMessage(dialog.id, { message: broadcastText || "", file: broadcastFile, formattingEntities: quoteEntities });
             } else {
-              await client.sendMessage(dialog.id, { message: broadcastText });
+              await client.sendMessage(dialog.id, { message: broadcastText, formattingEntities: quoteEntities });
             }
             success++;
           } catch (err) { failed++; }
@@ -232,7 +249,7 @@ async function startBot() {
             for (const dialog of groups) {
               if (!currentData.autoBroadcast) break;
               if (currentData.blacklist.includes(dialog.id.toString())) continue;
-              try { await client.sendMessage(dialog.id, { message: currentData.autoText }); } catch (err) {}
+              try { await client.sendMessage(dialog.id, { message: currentData.autoText, formattingEntities: buildQuoteEntities(currentData.autoText) }); } catch (err) {}
               if (currentData.autoBroadcast) await new Promise((r) => setTimeout(r, currentData.delay * 1000));
             }
           } catch (err) { console.error("Auto BC error:", err); }
