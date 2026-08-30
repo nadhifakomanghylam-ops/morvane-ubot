@@ -365,17 +365,20 @@ async function startBot() {
           return await respond(message, menus[sub]);
         }
 
-        // Grid teks: 2 kategori berdampingan di baris pertama, sisanya
-        // satu-satu ke bawah (bukan tombol asli — lihat catatan di bawah).
+        // List satu kolom aja — grid 2 kolom pakai padEnd gak reliable di
+        // Telegram karena lebar emoji angka beda-beda tiap device/font.
         const menuLabels = {
-          dasar: "Dasar", bc: "Broadcast", ar: "Auto-Reply",
-          bl: "Blacklist", prem: "Premium", lain: "Lain-lain",
+          dasar: { title: "Dasar", desc: "ping, info, id, dll" },
+          bc: { title: "Broadcast", desc: "kirim pesan manual & otomatis" },
+          ar: { title: "Auto-Reply", desc: "balas otomatis berbasis keyword" },
+          bl: { title: "Blacklist", desc: "kecualikan grup dari broadcast" },
+          prem: { title: "Premium", desc: "akses command dari chat pribadi" },
+          lain: { title: "Lain-lain", desc: "join grup, auto-delete, dll" },
         };
         const NUMBER_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣" };
-        const cell = (n) => `${NUMBER_EMOJI[n]} ${menuLabels[MENU_NUMBERS[n]]}`;
-        const grid =
-          `${cell(1).padEnd(18)}${cell(2)}\n` +
-          `${cell(3)}\n${cell(4)}\n${cell(5)}\n${cell(6)}`;
+        const grid = Object.entries(MENU_NUMBERS)
+          .map(([n, key]) => `${NUMBER_EMOJI[n]} ${menuLabels[key].title}\n     ${menuLabels[key].desc}`)
+          .join("\n\n");
 
         const mainMenuText = `╭─────────────────╮
    ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
@@ -383,10 +386,10 @@ async function startBot() {
 Prefix: "${prefix}"
 
 Pilih kategori (ketik angka atau nama):
+
 ${grid}
 
 Contoh: .menu 2  atau  .menu bc
-
 ╰─────────────────╯
 💠 Powered by Morvane UBot`;
 
