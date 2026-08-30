@@ -52,6 +52,93 @@ let lastBroadcastResult = null;
 let lastAutoReplyTime = 0;
 const autoReplyCooldownMap = new Map();
 
+// === NORMALISASI "FONT KEREN" UNICODE ===
+// Banyak yang ngetik pesan pakai font hasil generator (𝗕𝗼𝗹𝗱, 𝘐𝘵𝘢𝘭𝘪𝘤,
+// 𝓢𝓬𝓻𝓲𝓹𝓽, 𝔉𝔯𝔞𝔨𝔱𝔲𝔯, 𝔻𝕠𝕦𝕓𝕝𝕖-𝕊𝕥𝕣𝕦𝕔𝕜, fullwidth, circled, ᴏʀ ѕᴍᴀʟʟ ᴄᴀᴘѕ)
+// yang sebenarnya karakter Unicode berbeda dari a-z biasa. Tanpa
+// dinormalisasi, keyword "harga" gak bakal ketangkep kalau ditulis
+// "𝓱𝓪𝓻𝓰𝓪" atau "ʜᴀʀɢᴀ". Fungsi ini balikin semua varian itu ke a-z/0-9
+// polos sebelum dicocokkan ke keyword.
+function addFontRange(map, chars, startCode, exceptions = {}) {
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    const codePoint = exceptions[ch] !== undefined ? exceptions[ch] : startCode + i;
+    map.set(String.fromCodePoint(codePoint), ch.toLowerCase());
+  }
+}
+
+function buildFancyFontMap() {
+  const map = new Map();
+  const AZ = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const az = "abcdefghijklmnopqrstuvwxyz";
+  const digits = "0123456789";
+
+  // Blok "Mathematical Alphanumeric Symbols" (U+1D400 dst) — di sinilah
+  // hampir semua generator font Telegram ambil karakternya. Tiap style
+  // A-Z/a-z berurutan 26 code point, kecuali beberapa huruf yang udah
+  // punya simbol lama di Unicode (exceptions).
+  addFontRange(map, digits, 0x1d7ce); // digit Bold
+  const mathStyles = [
+    { upper: 0x1d400, lower: 0x1d41a }, // Bold
+    { upper: 0x1d434, lower: 0x1d44e, exL: { h: 0x210e } }, // Italic
+    { upper: 0x1d468, lower: 0x1d482 }, // Bold Italic
+    {
+      upper: 0x1d49c, lower: 0x1d4b6,
+      exU: { B: 0x212c, E: 0x2130, F: 0x2131, H: 0x210b, I: 0x2110, L: 0x2112, M: 0x2133, R: 0x211b },
+      exL: { e: 0x212f, g: 0x210a, o: 0x2134 },
+    }, // Script
+    { upper: 0x1d4d0, lower: 0x1d4ea }, // Bold Script
+    { upper: 0x1d504, lower: 0x1d51e, exU: { C: 0x212d, H: 0x210c, I: 0x2111, R: 0x211c, Z: 0x2128 } }, // Fraktur
+    {
+      upper: 0x1d538, lower: 0x1d552,
+      exU: { C: 0x2102, H: 0x210d, N: 0x2115, P: 0x2119, Q: 0x211a, R: 0x211d, Z: 0x2124 },
+      digit: 0x1d7d8,
+    }, // Double-Struck
+    { upper: 0x1d56c, lower: 0x1d586 }, // Bold Fraktur
+    { upper: 0x1d5a0, lower: 0x1d5ba, digit: 0x1d7e2 }, // Sans-Serif
+    { upper: 0x1d5d4, lower: 0x1d5ee, digit: 0x1d7ec }, // Sans-Serif Bold
+    { upper: 0x1d608, lower: 0x1d622 }, // Sans-Serif Italic
+    { upper: 0x1d63c, lower: 0x1d656 }, // Sans-Serif Bold Italic
+    { upper: 0x1d670, lower: 0x1d68a, digit: 0x1d7f6 }, // Monospace
+  ];
+  for (const s of mathStyles) {
+    addFontRange(map, AZ, s.upper, s.exU || {});
+    addFontRange(map, az, s.lower, s.exL || {});
+    if (s.digit) addFontRange(map, digits, s.digit);
+  }
+
+  // Fullwidth Latin (sering muncul dari keyboard tertentu)
+  addFontRange(map, AZ, 0xff21);
+  addFontRange(map, az, 0xff41);
+  addFontRange(map, digits, 0xff10);
+
+  // Ⓒⓘⓡⓒⓛⓔⓓ
+  addFontRange(map, AZ, 0x24b6);
+  addFontRange(map, az, 0x24d0);
+
+  // sᴍᴀʟʟ ᴄᴀᴘѕ — code point-nya loncat-loncat jadi ditulis manual
+  const smallCaps = {
+    ᴀ: "a", ʙ: "b", ᴄ: "c", ᴅ: "d", ᴇ: "e", ꜰ: "f", ɢ: "g", ʜ: "h", ɪ: "i",
+    ᴊ: "j", ᴋ: "k", ʟ: "l", ᴍ: "m", ɴ: "n", ᴏ: "o", ᴘ: "p", ǫ: "q", ʀ: "r",
+    ѕ: "s", ᴛ: "t", ᴜ: "u", ᴠ: "v", ᴡ: "w", ʏ: "y", ᴢ: "z",
+  };
+  for (const [k, v] of Object.entries(smallCaps)) map.set(k, v);
+
+  return map;
+}
+
+const FANCY_FONT_MAP = buildFancyFontMap();
+
+function normalizeFancyText(text) {
+  if (!text) return "";
+  // NFKC dulu buat nangkep karakter kompatibel bawaan Unicode (misal
+  // ligature) sebelum dipetakan manual lewat FANCY_FONT_MAP.
+  const normalized = text.normalize("NFKC");
+  let result = "";
+  for (const ch of normalized) result += FANCY_FONT_MAP.get(ch) || ch;
+  return result.toLowerCase();
+}
+
 // Bikin entity "blockquote" asli Telegram (bar kutip di kiri + ikon kutip),
 // bukan cuma ASCII art. Offset/length pakai text.length karena string JS
 // sudah dalam satuan UTF-16 code unit, sama seperti yang dipakai Telegram.
@@ -70,8 +157,10 @@ async function handleKeywordAutoReply(message, senderIdStr, data) {
   if (!ar.keywords.length) return;
   if (!data.autoText && !data.autoFile) return; // belum ada konten (pakai .setbc dulu)
 
-  const text = (message.message || "").toLowerCase();
-  const matched = ar.keywords.some((kw) => kw && text.includes(kw.toLowerCase()));
+  // Dinormalisasi dulu biar font "keren" (Bold/Italic/Script/Fraktur/
+  // Fullwidth/Small-caps dst) tetap ketangkep sebagai huruf biasa.
+  const text = normalizeFancyText(message.message || "");
+  const matched = ar.keywords.some((kw) => kw && text.includes(normalizeFancyText(kw)));
   if (!matched) return;
 
   const now = Date.now();
@@ -229,7 +318,8 @@ async function startBot() {
  ▸ ⏱️ .setarinterval <detik> — Jeda global antar reply
  ▸ 🧊 .setarcooldown <menit> — Cooldown per orang
  ▸ 📊 .arinfo — Info status auto-reply
- (Konten balasan pakai foto+teks dari .setbc)
+ ▸ 🔤 .testfont <teks> — Tes normalisasi font keren
+ (Konten balasan pakai foto+teks dari .setbc, deteksi keyword anti font keren)
 
 👑 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 (owner only)
  ▸ 🎟️ .addprem (reply pesan user) — Kasih akses premium
@@ -517,6 +607,9 @@ async function startBot() {
       } else if (command === "arinfo") {
         const ar = data.autoReply;
         await respond(message, `🤖 INFO AUTO-REPLY KEYWORD\n\n🟢 Status: ${ar.enabled ? "AKTIF" : "MATI"}\n🔑 Keyword (${ar.keywords.length}): ${ar.keywords.join(", ") || "-"}\n⏱️ Jeda global: ${ar.intervalSeconds} detik\n🧊 Cooldown per orang: ${ar.cooldownMinutes} menit\n📦 Konten: ${data.autoFile ? "Foto + teks (dari .setbc)" : data.autoText ? "Teks saja (dari .setbc)" : "❌ Belum diset, pakai .setbc dulu"}`);
+      } else if (command === "testfont") {
+        if (!argsText) return await respond(message, "❌ Kasih contoh teksnya!\nContoh: .testfont 𝓱𝓪𝓻𝓰𝓪 ᴅᴏɴɢ");
+        await respond(message, `🔤 TES NORMALISASI FONT\n\nAsli: ${argsText}\nHasil: ${normalizeFancyText(argsText)}`);
       } else if (command === "joingc") {
         const link = args[0];
         if (!link) {
