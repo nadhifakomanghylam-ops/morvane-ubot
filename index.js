@@ -28,6 +28,8 @@ function loadData() {
   if (typeof data.autoBroadcast !== "boolean") data.autoBroadcast = false;
   // Auto-delete balasan bot biar chat gak numpuk (detik; 0 = mati)
   if (typeof data.autoDeleteSeconds !== "number") data.autoDeleteSeconds = 30;
+  // Foto yang nemplok di pesan .menu utama (diset lewat .setmenupic)
+  if (data.menuPhoto === undefined) data.menuPhoto = null;
   // Konfigurasi auto-reply berbasis keyword (bukan ke semua pesan)
   if (!data.autoReply || typeof data.autoReply !== "object") data.autoReply = {};
   if (!Array.isArray(data.autoReply.keywords)) data.autoReply.keywords = [];
@@ -305,7 +307,8 @@ async function startBot() {
           dasar: `📋 𝗗𝗔𝗦𝗔𝗥
  ▸ 🏓 .ping — Cek kecepatan
  ▸ ℹ️ .info — Info akun
- ▸ 🆔 .id — Chat ID
+ ▸ 🆔 .id — Chat ID (reply pesan buat cek ID pengirimnya)
+ ▸ 🔎 .cekusn <id> — Cek username dari ID
  ▸ ✏️ .say <teks> — Edit pesan
  ▸ 🟢 .status — Status bot`,
 
@@ -347,30 +350,61 @@ async function startBot() {
 
           lain: `⚙️ 𝗟𝗔𝗜𝗡-𝗟𝗔𝗜𝗡
  ▸ 🔗 .joingc <link> — Join grup biar ikut kena broadcast
- ▸ 🧹 .autodel <detik|off> — Auto-hapus balasan bot biar gak numpuk`,
+ ▸ 🧹 .autodel <detik|off> — Auto-hapus balasan bot biar gak numpuk
+ ▸ 🖼️ .setmenupic (reply foto) — Set foto buat .menu utama
+ ▸ 🗑️ .delmenupic — Hapus foto menu`,
         };
 
-        const sub = (args[0] || "").toLowerCase();
+        // Nomor kategori, biar bisa dipilih pakai angka juga (.menu 2)
+        // selain nama (.menu bc).
+        const MENU_NUMBERS = { 1: "dasar", 2: "bc", 3: "ar", 4: "bl", 5: "prem", 6: "lain" };
+
+        const subInput = (args[0] || "").toLowerCase();
+        const sub = MENU_NUMBERS[subInput] || subInput;
         if (sub && menus[sub]) {
           return await respond(message, menus[sub]);
         }
 
-        await respond(message, `╭─────────────────╮
+        // Grid teks: 2 kategori berdampingan di baris pertama, sisanya
+        // satu-satu ke bawah (bukan tombol asli — lihat catatan di bawah).
+        const menuLabels = {
+          dasar: "Dasar", bc: "Broadcast", ar: "Auto-Reply",
+          bl: "Blacklist", prem: "Premium", lain: "Lain-lain",
+        };
+        const NUMBER_EMOJI = { 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣" };
+        const cell = (n) => `${NUMBER_EMOJI[n]} ${menuLabels[MENU_NUMBERS[n]]}`;
+        const grid =
+          `${cell(1).padEnd(18)}${cell(2)}\n` +
+          `${cell(3)}\n${cell(4)}\n${cell(5)}\n${cell(6)}`;
+
+        const mainMenuText = `╭─────────────────╮
    ✨ 𝗠𝗢𝗥𝗩𝗔𝗡𝗘 𝗨𝗕𝗢𝗧 ✨
 ╰─────────────────╯
 Prefix: "${prefix}"
 
-Ketik .menu <kategori> buat lihat detailnya:
+Pilih kategori (ketik angka atau nama):
+${grid}
 
- ▸ .menu dasar — command dasar
- ▸ .menu bc — broadcast manual & otomatis
- ▸ .menu ar — auto-reply keyword
- ▸ .menu bl — blacklist grup
- ▸ .menu prem — premium (owner)
- ▸ .menu lain — join grup, auto-delete, dll
+Contoh: .menu 2  atau  .menu bc
 
 ╰─────────────────╯
-💠 Powered by Morvane UBot`,);
+💠 Powered by Morvane UBot`;
+
+        const menuFilePath = data.menuPhoto ? path.join(__dirname, data.menuPhoto) : null;
+        if (menuFilePath && fs.existsSync(menuFilePath)) {
+          try {
+            const sentMenu = await client.sendMessage(message.chatId, {
+              message: mainMenuText,
+              file: menuFilePath,
+              replyTo: message.id,
+            });
+            scheduleAutoDelete(sentMenu);
+            return;
+          } catch (err) {
+            console.error("❌ Gagal kirim foto menu, fallback teks:", err.message);
+          }
+        }
+        await respond(message, mainMenuText);
       } else if (command === "ping") {
         const start = Date.now();
         await respond(message, "🏓 Pong...");
@@ -382,7 +416,50 @@ Ketik .menu <kategori> buat lihat detailnya:
         }
         await respond(message, argsText);
       } else if (command === "id") {
-        await respond(message, `🆔 Chat ID:\n${message.chatId}`);
+        const replyMessage = await message.getReplyMessage();
+        if (replyMessage) {
+          // Cek ID lewat reply: ambil ID pengirim pesan yang direply +
+          // info dasar chat tempat pesan itu berada.
+          const targetSenderId = replyMessage.senderId ? replyMessage.senderId.toString() : "-";
+          let targetName = "-";
+          try {
+            const sender = await replyMessage.getSender();
+            if (sender) {
+              targetName = sender.firstName
+                ? `${sender.firstName}${sender.lastName ? " " + sender.lastName : ""}`
+                : sender.title || "-";
+            }
+          } catch {
+            // Kalau gagal ambil sender (misal channel anonim), biarin "-"
+          }
+          await respond(
+            message,
+            `🆔 ID DARI PESAN YANG DI-REPLY\n\n👤 Nama: ${targetName}\n🆔 Sender ID: ${targetSenderId}\n💬 Chat ID: ${message.chatId}\n📩 Message ID: ${replyMessage.id}`,
+          );
+        } else {
+          await respond(message, `🆔 Chat ID:\n${message.chatId}\n\n💡 Reply pesan seseorang + .id buat lihat ID pengirimnya.`);
+        }
+      } else if (command === "cekusn") {
+        const targetId = args[0];
+        if (!targetId) {
+          return await respond(message, "❌ Masukkan ID user!\nContoh: .cekusn 8717917279");
+        }
+        try {
+          const entity = await client.getEntity(BigInt(targetId));
+          const username = entity.username ? `@${entity.username}` : "❌ Tidak punya username";
+          const name = entity.firstName
+            ? `${entity.firstName}${entity.lastName ? " " + entity.lastName : ""}`
+            : entity.title || "-";
+          await respond(
+            message,
+            `🔎 CEK USERNAME LEWAT ID\n\n🆔 ID: ${targetId}\n👤 Nama: ${name}\n🔗 Username: ${username}`,
+          );
+        } catch (err) {
+          await respond(
+            message,
+            `❌ Gagal cek ID ${targetId}: ${err.message}\n\n💡 Akun ini cuma bisa cek ID yang pernah "ketemu" (ada di grup/chat/kontak yang sama), karena Telegram butuh access_hash user tersebut.`,
+          );
+        }
       } else if (command === "info") {
         const me = await client.getMe();
         await respond(message, `👤 ACCOUNT INFO\nNama: ${me.firstName || "-"}\nUsername: @${me.username || "-"}\nID: ${me.id}`,);
@@ -664,6 +741,27 @@ Ketik .menu <kategori> buat lihat detailnya:
         data.autoDeleteSeconds = sec;
         saveData(data);
         await respond(message, `✅ Balasan bot bakal auto-kehapus setelah ${sec} detik.`);
+      } else if (command === "setmenupic") {
+        const replyMessage = await message.getReplyMessage();
+        if (!replyMessage || !replyMessage.photo) {
+          return await respond(message, "❌ Reply sebuah FOTO, baru ketik .setmenupic\nFoto ini bakal nempel di pesan .menu utama.");
+        }
+        try {
+          const mediaDir = path.join(__dirname, "media");
+          if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+          const buffer = await client.downloadMedia(replyMessage.media, {});
+          const relPath = path.join("media", "menupic.jpg");
+          fs.writeFileSync(path.join(__dirname, relPath), buffer);
+          data.menuPhoto = relPath;
+          saveData(data);
+          await respond(message, "✅ Foto menu diset! Ketik .menu buat lihat hasilnya.");
+        } catch (err) {
+          await respond(message, `❌ Gagal simpan foto: ${err.message}`);
+        }
+      } else if (command === "delmenupic") {
+        data.menuPhoto = null;
+        saveData(data);
+        await respond(message, "✅ Foto menu dihapus. .menu bakal balik jadi teks biasa.");
       } else if (command === "joingc") {
         const link = args[0];
         if (!link) {
