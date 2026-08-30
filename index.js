@@ -17,7 +17,7 @@ function loadData() {
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
   } catch {
-    return { blacklist: [], premium: [], autoText: "", delay: 10, autoBroadcast: false };
+    return { blacklist: [], premium: [], autoText: "", autoFile: null, delay: 10, autoBroadcast: false };
   }
 }
 
@@ -30,6 +30,8 @@ const client = new TelegramClient(stringSession, apiId, apiHash, {
 });
 
 let autoBroadcastInterval = null;
+// Simpan hasil broadcast terakhir (manual maupun otomatis) buat command .bclist
+let lastBroadcastResult = null;
 
 // Bikin entity "blockquote" asli Telegram (bar kutip di kiri + ikon kutip),
 // bukan cuma ASCII art. Offset/length pakai text.length karena string JS
@@ -137,10 +139,12 @@ async function startBot() {
 
 ⏱️ 𝗕𝗥𝗢𝗔𝗗𝗖𝗔𝗦𝗧 𝗢𝗧𝗢𝗠𝗔𝗧𝗜𝗦
  ▸ 📝 .setbc <teks> — Set teks auto
+ ▸ 📷 .setbc (reply foto) <teks> — Set foto+teks auto
  ▸ ⏳ .setdelay <detik> — Set jeda (min 10)
  ▸ ▶️ .onbc — Mulai auto broadcast
  ▸ ⏹️ .offbc — Stop auto broadcast
  ▸ 📊 .bcinfo — Info broadcast
+ ▸ 📋 .bclist — Daftar grup terkirim/gagal/skip
 
 🚫 𝗕𝗟𝗔𝗖𝗞𝗟𝗜𝗦𝗧 𝗚𝗥𝗨𝗣
  ▸ ➕ .addbl — Tambah grup ke blacklist
@@ -204,9 +208,12 @@ async function startBot() {
         const dialogs = await client.getDialogs();
         const groups = dialogs.filter((d) => d.isGroup || d.isChannel);
         let success = 0, failed = 0, skipped = 0;
+        const successList = [], failedList = [], skippedList = [];
 
         for (const dialog of groups) {
-          if (data.blacklist.includes(dialog.id.toString())) { skipped++; continue; }
+          const idStr = dialog.id.toString();
+          const title = dialog.title || dialog.name || "-";
+          if (data.blacklist.includes(idStr)) { skipped++; skippedList.push({ id: idStr, title }); continue; }
           try {
             if (broadcastFile) {
               await client.sendMessage(dialog.id, { message: broadcastText || "", file: broadcastFile, formattingEntities: quoteEntities });
@@ -214,15 +221,50 @@ async function startBot() {
               await client.sendMessage(dialog.id, { message: broadcastText, formattingEntities: quoteEntities });
             }
             success++;
-          } catch (err) { failed++; }
+            successList.push({ id: idStr, title });
+          } catch (err) {
+            failed++;
+            failedList.push({ id: idStr, title, reason: err.message });
+          }
         }
 
-        await respond(message, `✅ BROADCAST SELESAI!\n\n📊 Statistik:\n✔️ Berhasil: ${success}\n❌ Gagal: ${failed}\n⏭️ Dilewati (BL): ${skipped}\n\n📝 Pesan: ${broadcastText || "[FOTO]"}`,);
+        lastBroadcastResult = { success: successList, failed: failedList, skipped: skippedList, timestamp: Date.now() };
+
+        await respond(message, `✅ BROADCAST SELESAI!\n\n📊 Statistik:\n✔️ Berhasil: ${success}\n❌ Gagal: ${failed}\n⏭️ Dilewati (BL): ${skipped}\n\n📝 Pesan: ${broadcastText || "[FOTO]"}\n\nKetik .bclist buat lihat daftar grupnya.`,);
       } else if (command === "setbc") {
+        const replyMessage = await message.getReplyMessage();
+
+        if (replyMessage && replyMessage.media) {
+          // Mode FOTO + TEKS: gabung teks command dengan caption asli foto,
+          // fotonya didownload & disimpan ke disk biar bisa dipakai ulang
+          // tiap siklus auto broadcast (dan tetap ada walau bot direstart).
+          const combinedText = argsText
+            ? replyMessage.message ? `${argsText}\n\n${replyMessage.message}` : argsText
+            : replyMessage.message || "";
+
+          try {
+            const mediaDir = path.join(__dirname, "media");
+            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
+            const buffer = await client.downloadMedia(replyMessage.media, {});
+            const ext = replyMessage.photo ? "jpg" : "bin";
+            const relPath = path.join("media", `autobc.${ext}`);
+            fs.writeFileSync(path.join(__dirname, relPath), buffer);
+            data.autoFile = relPath;
+          } catch (err) {
+            return await respond(message, `❌ Gagal menyimpan foto: ${err.message}`);
+          }
+
+          data.autoText = combinedText;
+          saveData(data);
+          return await respond(message, `✅ Broadcast otomatis diset dengan FOTO + teks!\n\n📷 Foto tersimpan\n📝 Teks:\n${data.autoText || "[kosong]"}`,);
+        }
+
+        // Mode teks biasa (tanpa reply foto) -> reset foto yang lama (kalau ada)
         if (!args.length) {
-          return await respond(message, `❌ Masukkan teks!\nContoh: .setbc Halo semua\n\n📌 Teks sekarang: ${data.autoText || "[belum diset]"}`);
+          return await respond(message, `❌ Masukkan teks, atau reply foto buat mode foto+teks!\nContoh: .setbc Halo semua\n\n📌 Teks sekarang: ${data.autoText || "[belum diset]"}\n📷 Foto sekarang: ${data.autoFile ? "Ada" : "Tidak ada"}`);
         }
         data.autoText = argsText;
+        data.autoFile = null;
         saveData(data);
         await respond(message, `✅ Teks broadcast disimpan!\n\n"${data.autoText}"`);
       } else if (command === "setdelay") {
@@ -246,12 +288,32 @@ async function startBot() {
             const dialogs = await client.getDialogs();
             const groups = dialogs.filter((d) => d.isGroup || d.isChannel);
             const currentData = loadData();
+            const entities = buildQuoteEntities(currentData.autoText);
+            const filePath = currentData.autoFile ? path.join(__dirname, currentData.autoFile) : null;
+            const fileExists = filePath && fs.existsSync(filePath);
+            const runResult = { success: [], failed: [], skipped: [], timestamp: Date.now() };
+
             for (const dialog of groups) {
               if (!currentData.autoBroadcast) break;
-              if (currentData.blacklist.includes(dialog.id.toString())) continue;
-              try { await client.sendMessage(dialog.id, { message: currentData.autoText, formattingEntities: buildQuoteEntities(currentData.autoText) }); } catch (err) {}
+              const idStr = dialog.id.toString();
+              const title = dialog.title || dialog.name || "-";
+              if (currentData.blacklist.includes(idStr)) {
+                runResult.skipped.push({ id: idStr, title });
+                continue;
+              }
+              try {
+                if (fileExists) {
+                  await client.sendMessage(dialog.id, { message: currentData.autoText || "", file: filePath, formattingEntities: entities });
+                } else {
+                  await client.sendMessage(dialog.id, { message: currentData.autoText, formattingEntities: entities });
+                }
+                runResult.success.push({ id: idStr, title });
+              } catch (err) {
+                runResult.failed.push({ id: idStr, title, reason: err.message });
+              }
               if (currentData.autoBroadcast) await new Promise((r) => setTimeout(r, currentData.delay * 1000));
             }
+            lastBroadcastResult = runResult;
           } catch (err) { console.error("Auto BC error:", err); }
         }
 
@@ -266,7 +328,22 @@ async function startBot() {
         saveData(data);
         await respond(message, "🔴 AUTO BROADCAST DIHENTIKAN!");
       } else if (command === "bcinfo") {
-        await respond(message, ` INFO BROADCAST\n\n🟢 Auto BC: ${data.autoBroadcast ? "AKTIF" : "MATI"}\n📝 Teks: ${data.autoText || "[belum diset]"}\n⏱️ Delay: ${data.delay} detik\n🚫 Blacklist: ${data.blacklist.length} grup`,);
+        await respond(message, ` INFO BROADCAST\n\n🟢 Auto BC: ${data.autoBroadcast ? "AKTIF" : "MATI"}\n📷 Foto: ${data.autoFile ? "Ada" : "Tidak ada"}\n📝 Teks: ${data.autoText || "[belum diset]"}\n⏱️ Delay: ${data.delay} detik\n🚫 Blacklist: ${data.blacklist.length} grup`,);
+      } else if (command === "bclist") {
+        if (!lastBroadcastResult) {
+          return await respond(message, "📭 Belum ada history broadcast. Jalankan .broadcast / .bc atau .onbc dulu.");
+        }
+        const { success, failed, skipped, timestamp } = lastBroadcastResult;
+        const fmtList = (arr) => (arr.length ? arr.map((g, i) => `${i + 1}. ${g.title} (${g.id})${g.reason ? ` — ${g.reason}` : ""}`).join("\n") : "-");
+
+        let text = `📊 HASIL BROADCAST TERAKHIR\n🕒 ${new Date(timestamp).toLocaleString("id-ID")}\n\n`;
+        text += `✅ TERKIRIM (${success.length}):\n${fmtList(success)}\n\n`;
+        text += `❌ GAGAL (${failed.length}):\n${fmtList(failed)}\n\n`;
+        text += `⏭️ DILEWATI/BLACKLIST (${skipped.length}):\n${fmtList(skipped)}`;
+
+        // Batasi panjang biar gak kena limit pesan Telegram (4096 karakter)
+        if (text.length > 4000) text = text.slice(0, 3950) + "\n\n... (dipotong, kepanjangan)";
+        await respond(message, text);
       } else if (command === "addbl") {
         const chatId = message.chatId.toString();
         if (data.blacklist.includes(chatId)) return await respond(message, "⚠️ Sudah ada di blacklist!");
